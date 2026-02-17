@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GLM-OCR</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+
+<body>
+    <div class="bg-glow"></div>
+    <div class="bg-glow-bottom"></div>
+
+    <div class="app-container">
+        <header>
+            <div class="logo">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                    stroke-linecap="round" stroke-linejoin="round" style="color: #6366f1;">
+                    <path d="m16 6 4 14" />
+                    <path d="M12 6v14" />
+                    <path d="M8 8v12" />
+                    <path d="M4 4v16" />
+                </svg>
+                GLM-OCR
+            </div>
+            <div class="controls">
+                <button id="historyBtn" class="btn btn-outline">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                        <path d="M3 3v5h5" />
+                        <path d="M12 7v5l4 2" />
+                    </svg>
+                    History
+                </button>
+                <button id="newScanBtn" class="btn btn-outline" style="display: none;">New Scan</button>
+            </div>
+        </header>
+
+        <!-- Global Progress Monitoring -->
+        <div id="progressContainer" class="progress-bar-wrapper">
+            <div class="progress-info">
+                <div id="statusText">Ready to scan</div>
+                <div id="scanningIndicator" class="pulse-dot" style="display: none;"></div>
+            </div>
+            <div class="progress-bar-container">
+                <div id="progressBar" class="progress-bar"></div>
+            </div>
+        </div>
+
+        <!-- Initial Upload View -->
+        <main id="uploadView" class="fade-in">
+            <div id="dropZone" class="upload-card">
+                <div class="upload-icon">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="17 8 12 3 7 8" />
+                        <line x1="12" y1="3" x2="12" y2="15" />
+                    </svg>
+                </div>
+                <h2>Upload Document</h2>
+                <p>Drag and drop your PDF or images here</p>
+                <input type="file" id="fileInput" hidden accept=".pdf,.png,.jpg,.jpeg">
+            </div>
+        </main>
+
+        <!-- OCR Result View (Hidden by default) -->
+        <main id="resultView" class="main-view fade-in">
+            <!-- Left Side: Document Preview -->
+            <div class="panel">
+                <div class="panel-header">
+                    <span>Original Document w/ layout_vis</span>
+                    <div class="controls">
+                        <button id="toggleLayoutBtn" class="btn btn-outline btn-sm">Show Layout</button>
+                        <div class="page-info">
+                            Page <input type="text" id="imageJumpInput" class="jump-input" value="1" inputmode="numeric"
+                                pattern="[0-9]*"> / <span id="imagePageTotal">1</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="panel-content"
+                    style="background: #12141a; display: flex; align-items: center; justify-content: center;">
+                    <img id="pagePreview" src="" alt="Page Preview"
+                        style="max-width: 100%; max-height: 100%; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+                </div>
+            </div>
+
+            <!-- Right Side: OCR Content -->
+            <div class="panel">
+                <div class="panel-header">
+                    <span>OCR Result</span>
+                    <div class="controls">
+                        <button id="prevBtn" class="btn btn-outline btn-sm">Prev</button>
+                        <div class="page-info">
+                            <input type="text" id="textJumpInput" class="jump-input" value="1" inputmode="numeric"
+                                pattern="[0-9]*"> / <span id="textPageTotal">1</span>
+                        </div>
+                        <button id="nextBtn" class="btn btn-outline btn-sm">Next</button>
+                        <div class="dropdown">
+                            <button id="exportBtn" class="btn btn-primary btn-sm">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                    <polyline points="7 10 12 15 17 10" />
+                                    <line x1="12" y1="15" x2="12" y2="3" />
+                                </svg>
+                                Export
+                            </button>
+                            <div id="exportMenu" class="dropdown-content">
+                                <div class="dropdown-menu-list">
+                                    <div class="dropdown-header">Full Document</div>
+                                    <a href="#" onclick="handleExport('all', 'markdown')">All Pages (Markdown)</a>
+                                    <a href="#" onclick="handleExport('all', 'json')">All Pages (JSON)</a>
+                                    <div class="dropdown-header">Current Page</div>
+                                    <a href="#" onclick="handleExport('current', 'markdown')">Current Page
+                                        (Markdown)</a>
+                                    <a href="#" onclick="handleExport('current', 'json')">Current Page (JSON)</a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="markdownContainer" class="panel-content markdown-body">
+                    <!-- Markdown content goes here -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    </div>
+
+    <!-- History Modal -->
+    <div id="historyModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Scan History</h3>
+                <button id="closeHistoryBtn" class="btn-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                </button>
+            </div>
+            <div id="historyList" class="modal-content">
+                <div class="loading-spinner">Loading history...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+</body>
+
+</html>

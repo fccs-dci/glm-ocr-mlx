@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# GLM-OCR Studio Specific
+weights/
+glm-ocr/
+static/uploads/
+sessions/
+output/
