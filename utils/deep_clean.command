@@ -1,14 +1,15 @@
 #!/bin/bash
 
-# GLM-OCR Studio Deep Clean / Reset Utility
+# GLM-OCR Inference Deep Clean / Reset Utility
 # This script allows you to selectively restore the project to a clean state.
 
-# Get the directory of the script
+# Get the directory of the script and its parent (project root)
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-cd "$DIR"
+ROOT_DIR="$( dirname "$DIR" )"
+cd "$ROOT_DIR"
 
 echo "--------------------------------------------------"
-echo "GLM-OCR System Reset: Deep Clean"
+echo "GLM-OCR Inference System Reset: Deep Clean"
 echo "--------------------------------------------------"
 echo "Select which components you want to reset."
 echo ""
@@ -72,6 +73,6 @@ fi
 echo ""
 echo "--------------------------------------------------"
 echo "CLEANUP COMPLETE."
-echo "Run 'launch.command' to resume."
+echo "Run './launch.command' to resume."
 echo "--------------------------------------------------"
 read -p "Press Enter to exit..."

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# GLM-OCR Studio Launcher for macOS
+# GLM-OCR Inference Launcher for macOS
 # This script starts the MLX server and the Web UI.
 
 # Get the directory of the script
@@ -8,7 +8,7 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$DIR"
 
 echo "--------------------------------------------------"
-echo "GLM-OCR Initialization"
+echo "GLM-OCR Inference Initialization"
 echo "--------------------------------------------------"
 
 # 0. Check for Git and Library
@@ -59,7 +59,7 @@ fi
 
 # 4. Ensure models are downloaded and verified
 echo "Verifying model weights..."
-python download_weights.py
+python utils/download_weights.py
 if [ $? -ne 0 ]; then
     echo "Error: Model verification failed. Please check your internet connection."
     exit 1

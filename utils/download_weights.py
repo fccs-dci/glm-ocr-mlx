@@ -1,10 +1,21 @@
 import os
 import sys
+
+# Get project root (one level up from utils/)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
+
 from huggingface_hub import snapshot_download
+from utils.logger import setup_logging, get_logger
+
+# Initialize logging
+setup_logging()
+logger = get_logger("weights")
 
 def verify_weights(folder_name):
     """Checks if essential files exist in the model folder."""
-    base_dir = os.path.join(os.getcwd(), "weights", folder_name)
+    base_dir = os.path.join(PROJECT_ROOT, "weights", folder_name)
     if not os.path.exists(base_dir):
         return False
     
@@ -17,17 +28,17 @@ def download_weights():
         ("PaddlePaddle/PP-DocLayoutV3_safetensors", "PP-DocLayoutV3_safetensors")
     ]
     
-    os.makedirs("weights", exist_ok=True)
+    os.makedirs(os.path.join(PROJECT_ROOT, "weights"), exist_ok=True)
     
     for repo_id, folder_name in models:
-        local_dir = os.path.join(os.getcwd(), "weights", folder_name)
+        local_dir = os.path.join(PROJECT_ROOT, "weights", folder_name)
         
         if verify_weights(folder_name):
-            print(f"{folder_name} weights verified.")
+            logger.info(f"{folder_name} weights verified.")
             continue
             
-        print(f"Downloading weights for {repo_id}...")
-        print(f"Target: {local_dir}")
+        logger.info(f"Downloading weights for {repo_id}...")
+        logger.info(f"Target: {local_dir}")
         
         try:
             snapshot_download(
@@ -45,10 +56,10 @@ def download_weights():
                 ]
             )
         except Exception as e:
-            print(f"Error downloading {repo_id}: {e}")
+            logger.error(f"Error downloading {repo_id}: {e}")
             sys.exit(1)
     
-    print("\nAll model weights are ready!")
+    logger.info("All model weights are ready!")
 
 if __name__ == "__main__":
     download_weights()

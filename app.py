@@ -8,10 +8,16 @@ from flask import Flask, request, jsonify, render_template, send_from_directory
 from werkzeug.utils import secure_filename
 import pypdfium2 as pdfium
 from PIL import Image
-from glmocr import parse
+from glmocr import GlmOcr, parse
+from utils.logger import setup_logging, get_logger
 
+# Project Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 GLM_CONFIG = os.path.join(BASE_DIR, 'glm_config.yaml')
+
+# Initialize logging immediately
+setup_logging()
+logger = get_logger("app")
 
 app = Flask(__name__)
 
@@ -52,7 +58,7 @@ def load_job_state(job_id):
             with open(state_path, 'r') as f:
                 return json.load(f)
         except json.JSONDecodeError:
-            print(f"Warning: Corrupted session file detected and removed: {state_path}")
+            logger.warning(f"Corrupted session file detected and removed: {state_path}")
             try: os.remove(state_path)
             except: pass
             return None
@@ -92,6 +98,7 @@ def before_request():
 
 def ocr_worker(job_id, file_path):
     job = jobs[job_id]
+    logger.info(f"Starting OCR job for {job['filename']} (ID: {job_id})")
     job['status'] = 'processing'
     save_job_state(job_id)
 
@@ -109,6 +116,7 @@ def ocr_worker(job_id, file_path):
         # Prepare list of pages
         page_images = []
         if file_path.lower().endswith('.pdf'):
+            logger.info(f"[{job_id}] Splitting PDF into images...")
             job['status'] = 'splitting'
             save_job_state(job_id)
             
@@ -135,57 +143,62 @@ def ocr_worker(job_id, file_path):
         os.makedirs(pages_data_dir, exist_ok=True)
 
         pages_metadata = []
-        for i, img_path in enumerate(page_images):
-            # Update status for current page
-            job['status'] = 'processing'
-            job['current_page'] = i + 1
-            job['total_pages'] = num_pages
-            save_job_state(job_id)
-            
-            # Run GLM-OCR on this page
-            result = parse(img_path, config_path=GLM_CONFIG)
-            result.save(output_dir=job_output_dir)
-            
-            img_stem = os.path.splitext(os.path.basename(img_path))[0]
-            inner_dir = os.path.join(job_output_dir, img_stem)
-            
-            md_file = os.path.join(inner_dir, f"{img_stem}.md")
-            vis_dir = os.path.join(inner_dir, 'layout_vis')
-            
-            content = ""
-            if os.path.exists(md_file):
-                with open(md_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
-            
-            vis_image_url = None
-            orig_image_url = f"/api/image/{job_id}/page_{i}.jpg"
-            
-            if os.path.exists(vis_dir):
-                vis_files = sorted([f for f in os.listdir(vis_dir) if f.endswith(('.jpg', '.png'))])
-                if vis_files:
-                    vis_image_url = f"/api/image/{job_id}/{img_stem}/layout_vis/{vis_files[0]}"
+        
+        # Use a single GlmOcr session for the entire job
+        with GlmOcr(config_path=GLM_CONFIG) as model:
+            for i, img_path in enumerate(page_images):
+                # Update status for current page
+                logger.info(f"[{job_id}] Processing page {i+1}/{num_pages}...")
+                job['status'] = 'processing'
+                job['current_page'] = i + 1
+                job['total_pages'] = num_pages
+                save_job_state(job_id)
+                
+                # Run GLM-OCR on this page using the persistent model
+                result = model.parse(img_path)
+                result.save(output_dir=job_output_dir)
+                
+                img_stem = os.path.splitext(os.path.basename(img_path))[0]
+                inner_dir = os.path.join(job_output_dir, img_stem)
+                
+                md_file = os.path.join(inner_dir, f"{img_stem}.md")
+                vis_dir = os.path.join(inner_dir, 'layout_vis')
+                
+                content = ""
+                if os.path.exists(md_file):
+                    with open(md_file, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                
+                vis_image_url = None
+                orig_image_url = f"/api/image/{job_id}/page_{i}.jpg"
+                
+                if os.path.exists(vis_dir):
+                    vis_files = sorted([f for f in os.listdir(vis_dir) if f.endswith(('.jpg', '.png'))])
+                    if vis_files:
+                        vis_image_url = f"/api/image/{job_id}/{img_stem}/layout_vis/{vis_files[0]}"
 
-            page_data = {
-                'page_num': i + 1,
-                'content': content,
-                'image': orig_image_url,
-                'layout_image': vis_image_url or orig_image_url
-            }
+                page_data = {
+                    'page_num': i + 1,
+                    'content': content,
+                    'image': orig_image_url,
+                    'layout_image': vis_image_url or orig_image_url
+                }
 
-            # Save individual page data to disk
-            with open(os.path.join(pages_data_dir, f"page_{i}.json"), 'w') as pf:
-                json.dump(page_data, pf)
+                # Save individual page data to disk
+                with open(os.path.join(pages_data_dir, f"page_{i}.json"), 'w') as pf:
+                    json.dump(page_data, pf)
 
-            # Summary metadata (minimal for list/status)
-            pages_metadata.append({'page_num': i + 1})
+                # Summary metadata (minimal for list/status)
+                pages_metadata.append({'page_num': i + 1})
 
-            # Incremental update of progress (without heavy content)
-            job['progress'] = int(((i + 1) / num_pages) * 100)
-            job['total_pages_finished'] = len(pages_metadata)
-            save_job_state(job_id)
+                # Incremental update of progress (without heavy content)
+                job['progress'] = int(((i + 1) / num_pages) * 100)
+                job['total_pages_finished'] = len(pages_metadata)
+                save_job_state(job_id)
 
         job['status'] = 'completed'
         job['progress'] = 100
+        logger.info(f"[{job_id}] Job completed successfully.")
         save_job_state(job_id)
         
         # Cleanup source upload once processed
@@ -196,8 +209,7 @@ def ocr_worker(job_id, file_path):
             pass
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"[{job_id}] critical error during OCR processing")
         job['status'] = 'failed'
         job['error'] = str(e)
         save_job_state(job_id)

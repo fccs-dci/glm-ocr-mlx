@@ -1,4 +1,4 @@
-// GLM-OCR Studio | Frontend Logic
+// GLM-OCR Inference | Frontend Logic
 
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
@@ -33,7 +33,7 @@ let pageCache = {};
 
 // Initialize
 async function init() {
-    console.log("Initializing GLM-OCR Studio (Rapid Nav Version)...");
+    console.log("Initializing GLM-OCR Inference...");
 
     try {
         const response = await fetch('/api/jobs');

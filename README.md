@@ -1,6 +1,6 @@
-# GLM-OCR Studio
+# GLM-OCR Inference
 
-A local, high-fidelity OCR studio powered by GLM-4V and MLX. Designed for macOS (M-series) with zero-config setup.
+A local, high-fidelity OCR inference tool powered by GLM-4V and MLX. Designed for macOS (M-series) with zero-config setup.
 
 ## Quick Start
 To launch the application, double-click:
@@ -13,8 +13,8 @@ This script will automatically:ss
 4. Start the MLX server and Web UI (default: http://localhost:5003).
 
 ## Maintenance Scripts
-- **`deep_clean.command`**: An utility to reset the project. Use this if you encounter startup issues or want to clear all processed data/weights.
-- **`download_weights.py`**: Manually verify or download the model weights from Hugging Face.
+- **`utils/deep_clean.command`**: An utility to reset the project. Use this if you encounter startup issues or want to clear all processed data/weights.
+- **`utils/download_weights.py`**: Manually verify or download the model weights from Hugging Face.
 
 ## Configuration
 All advanced settings (timeouts, worker counts, layout detection) are managed in:
