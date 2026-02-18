@@ -27,10 +27,10 @@ if [ ! -d "glm-ocr" ]; then
     fi
 fi
 
-# 1. Check for Python
-if ! command -v python3 &> /dev/null; then
-    echo "Error: Python 3 not found."
-    echo "Please install Python from https://www.python.org/ or via Homebrew."
+# 1. Check for Python 3.12+
+if ! command -v python3 &> /dev/null || ! python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)" &> /dev/null; then
+    echo "Error: Python 3.12 or higher is required."
+    echo "Please install the latest Python from https://www.python.org/downloads/macos/"
     exit 1
 fi
 
