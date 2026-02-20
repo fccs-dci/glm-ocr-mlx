@@ -1,11 +1,11 @@
 import os
 import uuid
 import json
+import re
 import time
 import threading
 import shutil
 from flask import Flask, request, jsonify, render_template, send_from_directory
-from werkzeug.utils import secure_filename
 import pypdfium2 as pdfium
 from PIL import Image
 from glmocr import GlmOcr, parse
@@ -70,8 +70,6 @@ def get_image(job_id, filename):
     if not job:
         return "Job not found", 404
         
-    # Secure filename prevent directory traversal
-    safe_job_id = secure_filename(job_id)
     output_dir = job['output_dir']
     
     # Ensure we are serving from the correct job output dir
@@ -227,7 +225,10 @@ def upload_file():
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
     if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
+        original_filename = file.filename
+        safe_base = re.sub(r'[\\/:*?"<>|]', '_', original_filename)
+        
+        filename = safe_base
         job_id = str(uuid.uuid4())
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{job_id}_{filename}")
         file.save(file_path)

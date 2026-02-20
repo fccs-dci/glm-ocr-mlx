@@ -61,7 +61,8 @@ def setup_logging(level: Optional[str] = None, format_string: Optional[str] = No
         "httpx",
         "huggingface_hub",
         "urllib3",
-        "huggingface_hub.utils._http"
+        "huggingface_hub.utils._http",
+        "werkzeug"
     ]
     for logger_name in noisy_loggers:
         logging.getLogger(logger_name).setLevel(logging.WARNING)
