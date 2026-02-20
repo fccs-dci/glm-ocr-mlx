@@ -20,11 +20,7 @@ if [ ! -d "glm-ocr" ]; then
         exit 1
     fi
     echo "Cloning GLM-OCR library..."
-    git clone https://github.com/zai-org/GLM-OCR glm-ocr
-    if [ $? -ne 0 ]; then
-        echo "Error: Failed to clone GLM-OCR library."
-        exit 1
-    fi
+    git clone https://github.com/zai-org/GLM-OCR glm-ocr || { echo "Error: Failed to clone GLM-OCR library."; exit 1; }
 fi
 
 # 1. Check for Python 3.12+
@@ -37,15 +33,11 @@ fi
 # 2. Setup Virtual Environment if missing
 if [ ! -d ".venv" ]; then
     echo "First run detected! Setting up virtual environment..."
-    python3 -m venv .venv
-    if [ $? -ne 0 ]; then
-        echo "Error: Failed to create virtual environment."
-        exit 1
-    fi
+    python3 -m venv .venv || { echo "Error: Failed to create virtual environment."; exit 1; }
     source .venv/bin/activate
     echo "Installing dependencies (this may take a few minutes)..."
-    pip install --upgrade pip
-    pip install -r requirements.txt
+    pip install -q --upgrade pip
+    pip install -q -r requirements.txt
 else
     # Activate existing virtual environment
     source .venv/bin/activate
@@ -53,17 +45,13 @@ else
     # 3. Sync dependencies if requirements.txt changed
     if [ "requirements.txt" -nt ".venv/bin/activate" ]; then
         echo "Updating dependencies..."
-        pip install -r requirements.txt
+        pip install -q -r requirements.txt
     fi
 fi
 
 # 4. Ensure models are downloaded and verified
 echo "Verifying model weights..."
-python utils/download_weights.py
-if [ $? -ne 0 ]; then
-    echo "Error: Model verification failed. Please check your internet connection."
-    exit 1
-fi
+python utils/download_weights.py || { echo "Error: Model verification failed. Please check your internet connection."; exit 1; }
 
 # 5. Start MLX Server
 if lsof -Pi :8080 -sTCP:LISTEN -t >/dev/null ; then
@@ -76,8 +64,8 @@ else
     
     # Wait for MLX server to be ready (Port Check)
     echo "Waiting for MLX Server to bind to port 8080..."
-    MAX_RETRIES=60
-    RETRY_COUNT=0
+    MLX_MAX_RETRIES=60
+    MLX_RETRY_COUNT=0
     # Use nc -z to check if the port is open (more reliable than curl for health checks)
     while ! nc -z localhost 8080 > /dev/null; do
         # Check if process is still alive
@@ -86,8 +74,8 @@ else
             exit 1
         fi
         sleep 1
-        RETRY_COUNT=$((RETRY_COUNT + 1))
-        if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+        MLX_RETRY_COUNT=$((MLX_RETRY_COUNT + 1))
+        if [ $MLX_RETRY_COUNT -ge $MLX_MAX_RETRIES ]; then
             echo "Error: MLX Server failed to start within 60 seconds."
             kill $MLX_PID 2>/dev/null
             exit 1
@@ -103,13 +91,15 @@ APP_PID=$!
 
 # 7. Wait for Server & Launch browser
 echo "Waiting for Web Interface to be ready..."
-MAX_RETRIES=30
-RETRY_COUNT=0
+APP_MAX_RETRIES=30
+APP_RETRY_COUNT=0
 while ! curl -s http://localhost:5003 > /dev/null; do
     sleep 1
-    RETRY_COUNT=$((RETRY_COUNT + 1))
-    if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+    APP_RETRY_COUNT=$((APP_RETRY_COUNT + 1))
+    if [ $APP_RETRY_COUNT -ge $APP_MAX_RETRIES ]; then
         echo "Error: Web Interface failed to start within 30 seconds."
+        [ -n "$MLX_PID" ] && kill "$MLX_PID" 2>/dev/null
+        kill "$APP_PID" 2>/dev/null
         exit 1
     fi
 done
@@ -124,6 +114,6 @@ echo "Outputs: $DIR/output"
 echo "--------------------------------------------------"
 echo "Keep this window open. Press Ctrl+C to stop everything."
 
-# Capture termination signals
-trap "kill $MLX_PID $APP_PID; echo 'Servers stopped.'; exit" INT TERM
+# Capture termination signals (single quotes defer variable expansion to signal time)
+trap 'kill $MLX_PID $APP_PID 2>/dev/null; echo "Servers stopped."; exit' INT TERM
 wait
