@@ -152,8 +152,8 @@ async function pollStatus() {
             if (data.status === 'splitting') {
                 statusMsg = 'Splitting PDF into pages...';
             } else if (data.status === 'processing') {
-                if (data.current_page && data.total_pages) {
-                    statusMsg = `Processing page ${data.current_page} of ${data.total_pages}... (${progress}%)`;
+                if (data.total_pages) {
+                    statusMsg = `Processing page ${data.total_pages_finished + 1} of ${data.total_pages}... (${progress}%)`;
                 } else {
                     statusMsg = `Processing... (${progress}%)`;
                 }
