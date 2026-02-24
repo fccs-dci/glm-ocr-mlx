@@ -19,18 +19,19 @@ def verify_weights(folder_name):
     if not os.path.exists(base_dir):
         return False
     
-    found_weights = any(f.endswith('.safetensors') or f.endswith('.bin') or f.endswith('.model') for f in os.listdir(base_dir))
+    found_weights = any(f.endswith('.safetensors') for f in os.listdir(base_dir))
     return found_weights
 
 def download_weights():
     models = [
-        ("mlx-community/GLM-OCR-bf16", "GLM-OCR-bf16"),
-        ("PaddlePaddle/PP-DocLayoutV3_safetensors", "PP-DocLayoutV3_safetensors")
+        "mlx-community/GLM-OCR-bf16",
+        "PaddlePaddle/PP-DocLayoutV3_safetensors",
     ]
-    
+
     os.makedirs(os.path.join(PROJECT_ROOT, "weights"), exist_ok=True)
-    
-    for repo_id, folder_name in models:
+
+    for repo_id in models:
+        folder_name = repo_id.split('/')[-1]
         local_dir = os.path.join(PROJECT_ROOT, "weights", folder_name)
         
         if verify_weights(folder_name):
@@ -41,20 +42,7 @@ def download_weights():
         logger.info(f"Target: {local_dir}")
         
         try:
-            snapshot_download(
-                repo_id=repo_id,
-                local_dir=local_dir,
-                allow_patterns=[
-                    "*.json",
-                    "*.safetensors",
-                    "*.py",
-                    "*.model",
-                    "*.tiktoken",
-                    "*.txt",
-                    "*.jinja",
-                    "*.bin"
-                ]
-            )
+            snapshot_download(repo_id=repo_id, local_dir=local_dir)
         except Exception as e:
             logger.error(f"Error downloading {repo_id}: {e}")
             sys.exit(1)
