@@ -17,8 +17,9 @@ This script will automatically:ss
 - **`utils/download_weights.py`**: Manually verify or download the model weights from Hugging Face.
 
 ## Configuration
-All advanced settings (timeouts, worker counts, layout detection) are managed in:
-- `glm_config.yaml`
+All advanced settings (timeouts, worker counts, layout detection) are managed in the `config/` directory:
+- `config/glm_config_mac.yaml` — macOS (MLX / Apple Silicon)
+- `config/glm_config_windows.yaml` — Windows (Ollama / CPU + GPU)
 
 ## Files & Directories
 - `static/`: Frontend CSS, JS, and assets.

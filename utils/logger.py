@@ -6,7 +6,7 @@ from glmocr.config import load_config
 
 # Project root is one level up from this script (utils/)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GLM_CONFIG_PATH = os.path.join(PROJECT_ROOT, 'glm_config.yaml')
+GLM_CONFIG_PATH = os.environ.get('GLM_CONFIG')
 
 def setup_logging(level: Optional[str] = None, format_string: Optional[str] = None):
     """

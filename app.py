@@ -12,7 +12,7 @@ from glmocr import GlmOcr
 from utils.logger import setup_logging, get_logger
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-GLM_CONFIG = os.path.join(BASE_DIR, 'glm_config.yaml')
+GLM_CONFIG = os.environ.get('GLM_CONFIG')
 
 setup_logging()
 logger = get_logger("app")

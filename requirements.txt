@@ -3,5 +3,5 @@ pypdfium2>=5.3.0
 pillow>=9.0.0
 huggingface-hub
 requests>=2.28.0
-mlx-vlm>=0.1.0
+mlx-vlm>=0.1.0; sys_platform == "darwin"
 -e ./glm-ocr

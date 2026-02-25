@@ -74,6 +74,7 @@ fi
 
 # 6. Start Flask App
 echo "Starting Web Interface..."
+export GLM_CONFIG="$DIR/config/glm_config_mac.yaml"
 python app.py &
 APP_PID=$!
 

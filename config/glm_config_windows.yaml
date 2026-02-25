@@ -61,18 +61,18 @@ pipeline:
   ocr_api:
     # Basic connection
     api_host: localhost
-    api_port: 8080
+    api_port: 11434
 
     # Model name included in API requests.
     # Required for mlx_vlm.server (e.g. "mlx-community/GLM-OCR-bf16").
     # Set to `glm-ocr` to match `--served-model-name` when using vLLM/SGLang.
     # For Ollama, set to your model name (e.g. "glm-ocr:latest").
-    model: ./weights/GLM-OCR-bf16
+    model: glm-ocr:latest
 
     # URL construction: {api_scheme}://{api_host}:{api_port}{api_path}
     # Or set api_url directly to override
     api_scheme: null # null = auto (https if port 443, else http)
-    api_path: /chat/completions
+    api_path: /api/generate
     # Note: If using Ollama and encountering 502 errors with vision requests,
     # try switching to "ollama_generate" mode with api_path: /api/generate
     api_url: null # full URL override (optional)
@@ -80,7 +80,7 @@ pipeline:
     # API mode: "openai" (default) or "ollama_generate"
     # - "openai": Use OpenAI-compatible /v1/chat/completions endpoint (vLLM/SGLang/Ollama)
     # - "ollama_generate": Use Ollama's native /api/generate endpoint
-    api_mode: openai
+    api_mode: ollama_generate
 
     # Authentication (for MaaS providers like Zhipu, OpenAI, etc.)
     api_key: null # or set GLMOCR_API_KEY env var
@@ -90,9 +90,8 @@ pipeline:
     verify_ssl: false
 
     # Timeouts (seconds)
-    # Increased to 300s to allow for large model loading on the first run.
-    connect_timeout: 300 
-    request_timeout: 300
+    connect_timeout: 30
+    request_timeout: 120
 
     # Retry settings (helps with transient 429/5xx and overloaded OCR servers)
     retry_max_attempts: 2
@@ -106,8 +105,8 @@ pipeline:
     connection_pool_size: 128
 
   # Maximum parallel workers for region recognition (layout mode)
-  # Optimized for local M-series chips to avoid contention.
-  max_workers: 4
+  # Lower values to reduce 503 errors on busy OCR servers
+  max_workers: 32
   # Queue sizes
   page_maxsize: 100
   region_maxsize: 800
@@ -189,7 +188,7 @@ pipeline:
     # PP-DocLayoutV3 model directory
     # Can be a local folder or a Hugging Face model id
     # (Use *_safetensors for Transformers; PaddlePaddle/PP-DocLayoutV3 is a PaddleOCR export)
-    model_dir: PaddlePaddle/PP-DocLayoutV3_safetensors
+    model_dir: ./weights/PP-DocLayoutV3_safetensors
 
     # Detection threshold
     threshold: 0.3
