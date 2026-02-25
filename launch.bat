@@ -52,7 +52,16 @@ if %errorlevel% neq 0 (
 :: -------------------------------------------------------
 where ollama >nul 2>&1
 if %errorlevel% neq 0 (
-    echo Ollama not found. Installing...
+    echo.
+    echo Ollama is required to run GLM-OCR. It provides local AI inference
+    echo and will be installed to %LOCALAPPDATA%\Programs\Ollama.
+    echo.
+    choice /c YN /m "Install Ollama now?"
+    if !errorlevel! equ 2 (
+        echo Installation cancelled. Please install Ollama manually from https://ollama.com/download
+        pause & exit /b 1
+    )
+    echo Installing Ollama...
     powershell -Command "irm https://ollama.com/install.ps1 | iex"
     if !errorlevel! neq 0 (
         echo Error: Failed to install Ollama.
