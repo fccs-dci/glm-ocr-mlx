@@ -27,6 +27,9 @@ All advanced settings (timeouts, worker counts, layout detection) are managed in
 - `config/glm_config_mac.yaml` — macOS (MLX / Apple Silicon)
 - `config/glm_config_windows.yaml` — Windows (Ollama)
 
+## Third-Party Licenses
+This project includes a modified distribution of [glm-ocr](https://github.com/zai-org/GLM-OCR) by Zhipu AI, licensed under the [Apache License 2.0](glm-ocr/LICENSE). CLI, server, tests, and documentation have been removed for distribution purposes. No source files were modified.
+
 ## Files & Directories
 - `static/`: Frontend CSS, JS, and assets.
 - `templates/`: HTML interface.
