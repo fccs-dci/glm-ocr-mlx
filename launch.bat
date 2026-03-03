@@ -11,26 +11,6 @@ echo GLM-OCR Inference Initialization
 echo --------------------------------------------------
 
 :: -------------------------------------------------------
-:: 0. Check for GLM-OCR library (clone if missing)
-:: -------------------------------------------------------
-if not exist "glm-ocr" (
-    echo GLM-OCR library not found. Checking for Git...
-    where git >nul 2>&1
-    if !errorlevel! neq 0 (
-        echo Error: Git is not installed.
-        echo Please install Git from https://git-scm.com/download/win or manually
-        echo download the glm-ocr repo into this folder.
-        pause & exit /b 1
-    )
-    echo Cloning GLM-OCR library...
-    git clone https://github.com/zai-org/GLM-OCR glm-ocr
-    if !errorlevel! neq 0 (
-        echo Error: Failed to clone GLM-OCR library.
-        pause & exit /b 1
-    )
-)
-
-:: -------------------------------------------------------
 :: 1. Check for Python 3.12+
 :: -------------------------------------------------------
 where python >nul 2>&1
