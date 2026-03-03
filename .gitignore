@@ -13,9 +13,11 @@ dist/
 # macOS
 .DS_Store
 
+# Claude Code
+CLAUDE.md
+
 # GLM-OCR Studio Specific
 weights/
-glm-ocr/
 static/uploads/
 sessions/
 output/

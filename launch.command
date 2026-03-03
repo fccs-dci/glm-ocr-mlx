@@ -11,18 +11,6 @@ echo "--------------------------------------------------"
 echo "GLM-OCR Inference Initialization"
 echo "--------------------------------------------------"
 
-# 0. Check for Git and Library
-if [ ! -d "glm-ocr" ]; then
-    echo "GLM-OCR not found. Checking for Git..."
-    if ! command -v git &> /dev/null; then
-        echo "Error: Git is not installed."
-        echo "Please install Git or manually download the glm-ocr repo into this folder."
-        exit 1
-    fi
-    echo "Cloning GLM-OCR library..."
-    git clone https://github.com/zai-org/GLM-OCR glm-ocr || { echo "Error: Failed to clone GLM-OCR library."; exit 1; }
-fi
-
 # 1. Check for Python 3.12+
 if ! command -v python3 &> /dev/null || ! python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)" &> /dev/null; then
     echo "Error: Python 3.12 or higher is required."

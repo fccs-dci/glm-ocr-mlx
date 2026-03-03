@@ -40,15 +40,7 @@ if [[ "$clean_venv" =~ ^[Yy]$ ]]; then
     rm -rf .venv
 fi
 
-# 3. Remove SDK
-echo ""
-read -p "Delete GLM-OCR SDK? (y/N): " clean_sdk
-if [[ "$clean_sdk" =~ ^[Yy]$ ]]; then
-    echo "Removing glm-ocr folder..."
-    rm -rf glm-ocr
-fi
-
-# 4. Clear Temporary Data
+# 3. Clear Temporary Data
 echo ""
 read -p "Clear all uploads, sessions, and outputs? (y/N): " clean_data
 if [[ "$clean_data" =~ ^[Yy]$ ]]; then
@@ -59,7 +51,7 @@ if [[ "$clean_data" =~ ^[Yy]$ ]]; then
     find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null
 fi
 
-# 5. Weights Cleanup
+# 4. Weights Cleanup
 echo ""
 read -p "Delete AI model weights (20GB+)? (y/N): " clean_weights
 if [[ "$clean_weights" =~ ^[Yy]$ ]]; then
