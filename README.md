@@ -3,7 +3,7 @@
 > [!WARNING]
 > **Ollama users:** Do NOT update Ollama if prompted. Version 0.17.5 is broken with GLM-OCR. Stay on 0.17.0 until further notice.
 
-A local, high-fidelity OCR inference tool powered by GLM-4V. Supports macOS (M-series via MLX) and Windows (via Ollama).
+A local, high-fidelity OCR inference tool powered by GLM-OCR. Supports macOS (M-series via MLX) and Windows (via Ollama).
 
 ## Quick Start
 
