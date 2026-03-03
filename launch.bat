@@ -42,7 +42,7 @@ if %errorlevel% neq 0 (
         pause & exit /b 1
     )
     echo Installing Ollama v0.17.0...
-    powershell -Command "Invoke-WebRequest -Uri 'https://github.com/ollama/ollama/releases/download/v0.17.0/OllamaSetup.exe' -OutFile '%TEMP%\OllamaSetup.exe'; Start-Process '%TEMP%\OllamaSetup.exe' -ArgumentList '/S' -Wait"
+    powershell -Command "$env:OLLAMA_VERSION='0.17.0'; irm https://ollama.com/install.ps1 | iex"
     if !errorlevel! neq 0 (
         echo Error: Failed to install Ollama.
         echo Please install manually from https://ollama.com/download
