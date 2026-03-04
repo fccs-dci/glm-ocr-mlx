@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableDelayedExpansion
 
-:: GLM-OCR Inference Launcher for Windows
+:: GLM-OCR Inference — Launcher for Windows
 
 set "DIR=%~dp0"
 cd /d "%DIR%"
