@@ -27,6 +27,58 @@ All advanced settings (timeouts, worker counts, layout detection) are managed in
 - `config/glm_config_mac.yaml` — macOS (MLX / Apple Silicon)
 - `config/glm_config_windows.yaml` — Windows (Ollama)
 
+**OCR-ing image and chart regions:**
+
+By default, regions the layout detector labels as `image` or `chart` are skipped (saved as image crops). To OCR them as text instead, move them from `skip` to `text` in both config files:
+
+```yaml
+# Before
+label_task_mapping:
+  skip:
+    - image
+    - chart
+label_visualization_mapping:
+  image:
+    - image
+    - chart
+```
+
+```yaml
+# After
+label_task_mapping:
+  skip: []
+  text:
+    - image
+    - chart
+    # ... (plus all other text labels)
+label_visualization_mapping:
+  image: []
+  text:
+    - image
+    - chart
+    # ... (plus all other text labels)
+```
+
+**Per-class detection thresholds:**
+
+The layout detector uses a global threshold, but individual classes can be overridden. For example, to improve recall on `vertical_text` (class 23):
+
+```yaml
+# Default
+layout:
+  threshold: 0.3
+```
+
+```yaml
+# With per-class override
+layout:
+  threshold: 0.3
+  threshold_by_class:
+    23: 0.2  # vertical_text
+```
+
+See `id2label` in the config for the full list of class indices.
+
 ## Third-Party Licenses
 This project includes a modified distribution of [glm-ocr](https://github.com/zai-org/GLM-OCR) by Zhipu AI, licensed under the [Apache License 2.0](glm-ocr/LICENSE). CLI, server, tests, and documentation have been removed for distribution purposes. No source files were modified.
 
