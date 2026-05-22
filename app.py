@@ -3,6 +3,8 @@ import uuid
 import json
 import re
 import time
+import threading
+import tempfile
 from urllib.parse import quote
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from concurrent.futures import ThreadPoolExecutor
@@ -40,7 +42,39 @@ for folder in [UPLOAD_FOLDER, OUTPUT_FOLDER, SESSIONS_FOLDER]:
     os.makedirs(folder, exist_ok=True)
 
 jobs = {}
+_jobs_lock = threading.Lock()
+_cancel_events = {}
+_job_futures = {}
 job_executor = ThreadPoolExecutor(max_workers=1)
+
+_SAFE_JOB_ID = re.compile(r'^[a-zA-Z0-9_-]+$')
+
+
+def _valid_job_id(job_id):
+    return bool(_SAFE_JOB_ID.match(job_id))
+
+
+def _update_job(job_id, **updates):
+    with _jobs_lock:
+        jobs[job_id].update(updates)
+
+
+def _get_job(job_id):
+    with _jobs_lock:
+        job = jobs.get(job_id)
+        if job:
+            return dict(job)
+    return load_job_state(job_id)
+
+
+def _submit_job(job_id, fn, *args):
+    _cancel_events[job_id] = threading.Event()
+    _job_futures[job_id] = job_executor.submit(fn, job_id, *args)
+
+
+def _is_cancelled(job_id):
+    evt = _cancel_events.get(job_id)
+    return evt is not None and evt.is_set()
 
 def allowed_file(filename):
     """Return True if 'filename' has an allowed extension."""
@@ -50,12 +84,25 @@ def allowed_file(filename):
 def save_job_state(job_id):
     """Write the current in-memory state of a job to disk as JSON.
 
-    This is called after every meaningful state change (status, progress, etc.)
-    so that if the app restarts, we can restore the job's state from disk.
+    Takes a snapshot under the lock and writes atomically via temp file +
+    os.replace so a crash mid-write never corrupts the session file.
     """
-    state_path = os.path.join(app.config['SESSIONS_FOLDER'], f'{job_id}.json')
-    with open(state_path, 'w') as f:
-        json.dump(jobs[job_id], f)
+    with _jobs_lock:
+        state = dict(jobs[job_id])
+    sessions_dir = app.config['SESSIONS_FOLDER']
+    os.makedirs(sessions_dir, exist_ok=True)
+    state_path = os.path.join(sessions_dir, f'{job_id}.json')
+    fd, tmp_path = tempfile.mkstemp(dir=sessions_dir, suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(state, f)
+        os.replace(tmp_path, state_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def load_job_state(job_id):
@@ -133,14 +180,11 @@ def index():
 
 @app.route('/api/image/<job_id>/<path:filename>')
 def get_image(job_id, filename):
-    """Serve an image file that belongs to a specific job.
+    """Serve an image file that belongs to a specific job."""
+    if not _valid_job_id(job_id):
+        return "Invalid job ID", 400
 
-    The <path:filename> converter allows slashes in the filename segment,
-    which we need because images are nested in subdirectories
-    (e.g. page_0/layout_vis/vis.jpg).
-    """
-    # Try in-memory first; fall back to disk if the app was restarted.
-    job = jobs.get(job_id) or load_job_state(job_id)
+    job = _get_job(job_id)
     if not job:
         return "Job not found", 404
 
@@ -150,46 +194,98 @@ def get_image(job_id, filename):
 
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
-    """Accept an uploaded image or PDF, create a job, and queue it for OCR.
+    """Accept one or more uploaded files, create jobs, and queue them for OCR.
 
-    Returns immediately with a job_id. The actual OCR happens in the
-    background via job_executor (see ThreadPoolExecutor above).
+    Requires a 'mode' field: 'pdf' or 'image'. All files must match the mode.
+    Image mode accepts an optional 'bundle' field ('true'/'false') to control
+    whether multiple images are grouped into a single job.
     """
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file part'}), 400
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
+    mode = request.form.get('mode')
+    if mode not in ('pdf', 'image'):
+        return jsonify({'error': 'Missing or invalid mode (must be "pdf" or "image")'}), 400
 
-    if file and allowed_file(file.filename):
-        filename = re.sub(r'[\\/:*?"<>|]', '_', file.filename)
+    files = request.files.getlist('files')
+    if not files or all(f.filename == '' for f in files):
+        return jsonify({'error': 'No files provided'}), 400
+
+    allowed_exts = {'pdf'} if mode == 'pdf' else {'png', 'jpg', 'jpeg'}
+    for f in files:
+        if not f.filename or '.' not in f.filename:
+            return jsonify({'error': f'Invalid file: {f.filename}'}), 400
+        ext = f.filename.rsplit('.', 1)[1].lower()
+        if ext not in allowed_exts:
+            return jsonify({'error': f'File "{f.filename}" does not match {mode} mode'}), 400
+
+    bundle = request.form.get('bundle', 'true') == 'true'
+    created_jobs = []
+    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+    if mode == 'pdf':
+        for f in files:
+            filename = re.sub(r'[\\/:*?"<>|]', '_', f.filename)
+            job_id = str(uuid.uuid4())
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{job_id}_{filename}")
+            f.save(file_path)
+
+            jobs[job_id] = {
+                'job_id': job_id, 'filename': filename, 'status': 'queued',
+                'progress': 0, 'total_pages_finished': 0, 'last_page_index': 0,
+                'start_time': time.time()
+            }
+            save_job_state(job_id)
+            _submit_job(job_id, ocr_worker, file_path)
+            created_jobs.append({'job_id': job_id, 'filename': filename})
+
+    elif mode == 'image' and bundle and len(files) > 1:
         job_id = str(uuid.uuid4())
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{job_id}_{filename}")
-        file.save(file_path)
+        saved_paths = []
+        filenames = []
+        for f in files:
+            filename = re.sub(r'[\\/:*?"<>|]', '_', f.filename)
+            filenames.append(filename)
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{job_id}_{filename}")
+            f.save(file_path)
+            saved_paths.append(file_path)
 
+        display_name = f"{len(filenames)} images ({filenames[0]}, ...)"
         jobs[job_id] = {
-            'job_id':               job_id,
-            'filename':             filename,
-            'status':               'queued',   # queued → splitting → processing → completed/failed
-            'progress':             0,          # 0–100 percentage
-            'total_pages_finished': 0,
-            'last_page_index':      0,          # Which page the UI was last viewing
-            'start_time':           time.time()
+            'job_id': job_id, 'filename': display_name, 'status': 'queued',
+            'progress': 0, 'total_pages_finished': 0, 'last_page_index': 0,
+            'start_time': time.time()
         }
         save_job_state(job_id)
+        _submit_job(job_id, ocr_worker_batch_images, saved_paths)
+        created_jobs.append({'job_id': job_id, 'filename': display_name})
 
-        job_executor.submit(ocr_worker, job_id, file_path)
+    else:
+        for f in files:
+            filename = re.sub(r'[\\/:*?"<>|]', '_', f.filename)
+            job_id = str(uuid.uuid4())
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{job_id}_{filename}")
+            f.save(file_path)
 
-        return jsonify({'job_id': job_id})
+            jobs[job_id] = {
+                'job_id': job_id, 'filename': filename, 'status': 'queued',
+                'progress': 0, 'total_pages_finished': 0, 'last_page_index': 0,
+                'start_time': time.time()
+            }
+            save_job_state(job_id)
+            _submit_job(job_id, ocr_worker, file_path)
+            created_jobs.append({'job_id': job_id, 'filename': filename})
 
-    return jsonify({'error': 'Invalid file type'}), 400
+    response = {'jobs': created_jobs}
+    if len(created_jobs) == 1:
+        response['job_id'] = created_jobs[0]['job_id']
+    return jsonify(response)
 
 
 @app.route('/api/status/<job_id>')
 def get_status(job_id):
     """Return the current state of a job (status, progress, page count, etc.)."""
-    # Try RAM first for speed, fall back to disk for older/reloaded jobs.
-    job = jobs.get(job_id) or load_job_state(job_id)
+    if not _valid_job_id(job_id):
+        return jsonify({'error': 'Invalid job ID'}), 400
+
+    job = _get_job(job_id)
     if not job:
         return jsonify({'error': 'Job not found'}), 404
     return jsonify(job)
@@ -199,70 +295,139 @@ def get_status(job_id):
 def list_jobs():
     """Return a summary list of all known jobs, sorted newest first.
 
-    We read from disk (sessions/) rather than the in-memory dict because
-    in-memory state is lost on restart, but session files survive.
+    Merges on-disk session files with in-memory jobs so that queued and
+    processing jobs (which may not have an output_dir yet) are included.
     """
+    seen_ids = set()
     available_jobs = []
-    session_files = [f for f in os.listdir(app.config['SESSIONS_FOLDER']) if f.endswith('.json')]
 
+    def _job_summary(job_state):
+        return {
+            'job_id':     job_state.get('job_id'),
+            'filename':   job_state.get('filename'),
+            'status':     job_state.get('status'),
+            'progress':   job_state.get('progress'),
+            'start_time': job_state.get('start_time'),
+            'page_count': job_state.get('total_pages_finished', 0)
+        }
+
+    with _jobs_lock:
+        in_memory = list(jobs.items())
+
+    for job_id, job_state in in_memory:
+        seen_ids.add(job_id)
+        available_jobs.append(_job_summary(job_state))
+
+    sessions_dir = app.config['SESSIONS_FOLDER']
+    os.makedirs(sessions_dir, exist_ok=True)
+    session_files = [f for f in os.listdir(sessions_dir) if f.endswith('.json')]
     for f in session_files:
         job_id = f.replace('.json', '')
+        if job_id in seen_ids:
+            continue
         job_state = load_job_state(job_id)
         if job_state:
             output_dir = job_state.get('output_dir')
-            if output_dir and os.path.exists(output_dir):
-                # Output directory still on disk — include this job in the list.
-                available_jobs.append({
-                    'job_id':     job_id,
-                    'filename':   job_state.get('filename'),
-                    'status':     job_state.get('status'),
-                    'progress':   job_state.get('progress'),
-                    'start_time': job_state.get('start_time'),
-                    'page_count': job_state.get('total_pages_finished', 0)
-                })
+            status = job_state.get('status')
+            if status in ('queued', 'splitting', 'processing', 'cancelling'):
+                available_jobs.append(_job_summary(job_state))
+            elif output_dir and os.path.exists(output_dir):
+                available_jobs.append(_job_summary(job_state))
             else:
-                # Output directory was deleted (e.g. user cleaned up manually).
-                # Remove the dangling session file.
                 try:
                     os.remove(os.path.join(app.config['SESSIONS_FOLDER'], f))
                 except Exception as e:
                     logger.warning(f"Could not remove stale session file {f}: {e}")
 
-    # Sort newest first so the UI shows the most recent job at the top.
     available_jobs.sort(key=lambda x: x.get('start_time', 0), reverse=True)
     return jsonify(available_jobs)
 
 
+@app.route('/api/cancel/<job_id>', methods=['POST'])
+def cancel_job(job_id):
+    """Cancel a single job. Queued jobs are removed; running jobs stop after the current page."""
+    if not _valid_job_id(job_id):
+        return jsonify({'error': 'Invalid job ID'}), 400
+
+    job = _get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    if job.get('status') in ('completed', 'failed', 'cancelled', 'cancelling'):
+        return jsonify({'status': job['status']})
+
+    evt = _cancel_events.get(job_id)
+    if evt:
+        evt.set()
+
+    future = _job_futures.get(job_id)
+    if future:
+        future.cancel()
+
+    new_status = 'cancelling' if job.get('status') in ('processing', 'splitting') else 'cancelled'
+    _update_job(job_id, status=new_status)
+    save_job_state(job_id)
+    return jsonify({'status': new_status})
+
+
+@app.route('/api/cancel_all', methods=['POST'])
+def cancel_all_jobs():
+    """Cancel all queued and in-progress jobs."""
+    cancelled = []
+    with _jobs_lock:
+        active_ids = [
+            jid for jid, state in jobs.items()
+            if state.get('status') in ('queued', 'splitting', 'processing')
+        ]
+
+    for job_id in active_ids:
+        job = _get_job(job_id)
+        if not job or job.get('status') in ('completed', 'failed', 'cancelled', 'cancelling'):
+            continue
+
+        evt = _cancel_events.get(job_id)
+        if evt:
+            evt.set()
+
+        future = _job_futures.get(job_id)
+        if future:
+            future.cancel()
+
+        new_status = 'cancelling' if job.get('status') in ('processing', 'splitting') else 'cancelled'
+        _update_job(job_id, status=new_status)
+        save_job_state(job_id)
+        cancelled.append(job_id)
+
+    return jsonify({'cancelled': cancelled})
+
+
 @app.route('/api/last_page/<job_id>', methods=['POST'])
 def update_last_page(job_id):
-    """Remember which page the user was last viewing for a given job.
+    """Remember which page the user was last viewing for a given job."""
+    if not _valid_job_id(job_id):
+        return jsonify({'error': 'Invalid job ID'}), 400
 
-    The browser calls this when the user flips to a different page, so if
-    they close and reopen the app, it can restore their scroll position.
-    """
-    if job_id not in jobs:
-        # Job might not be in RAM if the app was restarted — reload from disk.
-        job = load_job_state(job_id)
-        if not job:
-            return jsonify({'error': 'Job not found'}), 404
-        jobs[job_id] = job  # Bring back into memory
+    with _jobs_lock:
+        if job_id not in jobs:
+            job = load_job_state(job_id)
+            if not job:
+                return jsonify({'error': 'Job not found'}), 404
+            jobs[job_id] = job
 
     data = request.json
     page_idx = data.get('page_index', 0)
-    jobs[job_id]['last_page_index'] = page_idx
+    _update_job(job_id, last_page_index=page_idx)
     save_job_state(job_id)
     return jsonify({'status': 'success'})
 
 
 @app.route('/api/page/<job_id>/<int:page_idx>')
 def get_page_content(job_id, page_idx):
-    """Return the OCR result for a single page as JSON.
+    """Return the OCR result for a single page as JSON."""
+    if not _valid_job_id(job_id):
+        return jsonify({'error': 'Invalid job ID'}), 400
 
-    Each page is stored as its own JSON file under output/<job>/pages_data/,
-    written by the worker as soon as that page finishes. This lets the
-    browser display results page-by-page without waiting for the whole job.
-    """
-    job = jobs.get(job_id) or load_job_state(job_id)
+    job = _get_job(job_id)
     if not job:
         return jsonify({'error': 'Job not found'}), 404
 
@@ -282,18 +447,15 @@ def get_page_content(job_id, page_idx):
 
 @app.route('/api/export/<job_id>')
 def export_job(job_id):
-    """Export a job's OCR results as a downloadable file.
+    """Export a job's OCR results as a downloadable file."""
+    if not _valid_job_id(job_id):
+        return jsonify({'error': 'Invalid job ID'}), 400
 
-    Query params:
-      format  — 'markdown' (default) or 'json'
-      scope   — 'all' (default) or 'current' (single page)
-      page_idx — required when scope='current'
-    """
     fmt      = request.args.get('format', 'markdown')
     scope    = request.args.get('scope', 'all')
     page_idx = request.args.get('page_idx', type=int)
 
-    job = jobs.get(job_id) or load_job_state(job_id)
+    job = _get_job(job_id)
     if not job:
         return jsonify({'error': 'Job not found'}), 404
 
@@ -330,6 +492,8 @@ def export_job(job_id):
                         page_data = json.load(f)
                         content.append(f"## Page {idx + 1}\n\n" + page_data.get('content', ''))
 
+        if not content:
+            return jsonify({'error': 'No page data available'}), 404
         # Join pages with a horizontal rule separator.
         full_text = "\n\n---\n\n".join(content)
         return full_text, 200, {
@@ -354,8 +518,8 @@ def export_job(job_id):
                     with open(page_file, 'r', encoding='utf-8') as f:
                         results.append(json.load(f))
 
-        # For a single-page export return the object directly; for multi-page
-        # return a list — this gives cleaner JSON in both cases.
+        if not results:
+            return jsonify({'error': 'No page data available'}), 404
         result_data = results[0] if len(results) == 1 else results
         return jsonify(result_data), 200, {
             'Content-Type': 'application/json',
@@ -364,18 +528,64 @@ def export_job(job_id):
 
     return jsonify({'error': 'Invalid format'}), 400
 
+def _process_page(job_id, model, img_path, page_index, num_pages, job_output_dir, pages_data_dir):
+    """Run OCR on a single page image and save results. Updates job progress."""
+    logger.info(f"[{job_id}] Processing page {page_index+1}/{num_pages}...")
+    result = model.parse(img_path)
+    result.save(output_dir=job_output_dir)
+
+    img_stem = os.path.splitext(os.path.basename(img_path))[0]
+    page_output_dir = os.path.join(job_output_dir, img_stem)
+
+    md_file = os.path.join(page_output_dir, f"{img_stem}.md")
+    vis_dir = os.path.join(page_output_dir, 'layout_vis')
+
+    content = ""
+    if os.path.exists(md_file):
+        with open(md_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+    orig_image_url = f"/api/image/{job_id}/page_{page_index}.jpg"
+    vis_image_url  = None
+
+    if os.path.exists(vis_dir):
+        vis_files = sorted([f for f in os.listdir(vis_dir) if f.endswith(('.jpg', '.png'))])
+        if vis_files:
+            vis_image_url = f"/api/image/{job_id}/{img_stem}/layout_vis/{vis_files[0]}"
+
+    page_data = {
+        'page_num':     page_index + 1,
+        'content':      content,
+        'image':        orig_image_url,
+        'layout_image': vis_image_url or orig_image_url
+    }
+
+    with open(os.path.join(pages_data_dir, f"page_{page_index}.json"), 'w') as pf:
+        json.dump(page_data, pf)
+
+    if not _is_cancelled(job_id):
+        _update_job(job_id,
+            status='processing',
+            total_pages=num_pages,
+            progress=int(((page_index + 1) / num_pages) * 100),
+            total_pages_finished=page_index + 1,
+        )
+        save_job_state(job_id)
+
+
 def ocr_worker(job_id, file_path):
-    """Process a single upload: convert to images, run OCR, save results.
-
-    This function is called by the ThreadPoolExecutor in a BACKGROUND THREAD,
-    not in the main Flask thread. That's why it can take as long as it needs
-    without blocking any HTTP responses.
-
-    It communicates progress back to the Flask routes by writing directly to
-    the shared 'jobs' dict and calling save_job_state() after each page.
-    """
+    """Process a single upload: convert to images, run OCR, save results."""
+    if _is_cancelled(job_id):
+        _update_job(job_id, status='cancelled')
+        save_job_state(job_id)
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception:
+            pass
+        return
     filename = jobs[job_id]['filename']
-    jobs[job_id]['status'] = 'processing'
+    _update_job(job_id, status='processing')
     logger.info(f"Starting OCR job for {filename} (ID: {job_id})")
     save_job_state(job_id)
 
@@ -386,26 +596,26 @@ def ocr_worker(job_id, file_path):
         job_output_dir = os.path.join(app.config['OUTPUT_FOLDER'], folder_name)
         os.makedirs(job_output_dir, exist_ok=True)
 
-        jobs[job_id]['output_dir'] = job_output_dir
+        _update_job(job_id, output_dir=job_output_dir)
 
         page_images = []
         if file_path.lower().endswith('.pdf'):
-            # PDF — rasterise every page to JPEG at 200 DPI.
-            # 200/72 is the scale factor because pypdfium works in 72 DPI units.
             logger.info(f"[{job_id}] Splitting PDF into images...")
-            jobs[job_id]['status'] = 'splitting'
+            _update_job(job_id, status='splitting')
             save_job_state(job_id)
 
             pdf = pdfium.PdfDocument(file_path)
-            num_pages = len(pdf)
-            for i in range(num_pages):
-                page   = pdf[i]
-                bitmap = page.render(scale=200/72)
-                pil_image = bitmap.to_pil()
-                img_path = os.path.join(job_output_dir, f"page_{i}.jpg")
-                pil_image.save(img_path)
-                page_images.append(img_path)
-            pdf.close()
+            try:
+                num_pages = len(pdf)
+                for i in range(num_pages):
+                    page   = pdf[i]
+                    bitmap = page.render(scale=200/72)
+                    pil_image = bitmap.to_pil()
+                    img_path = os.path.join(job_output_dir, f"page_{i}.jpg")
+                    pil_image.save(img_path)
+                    page_images.append(img_path)
+            finally:
+                pdf.close()
         else:
             num_pages = 1
             img_path  = os.path.join(job_output_dir, "page_0.jpg")
@@ -418,63 +628,103 @@ def ocr_worker(job_id, file_path):
 
         with GlmOcr(config_path=GLM_CONFIG) as model:
             for i, img_path in enumerate(page_images):
-                logger.info(f"[{job_id}] Processing page {i+1}/{num_pages}...")
-                result = model.parse(img_path)
+                if _is_cancelled(job_id):
+                    logger.info(f"[{job_id}] Cancelled after page {i}.")
+                    _update_job(job_id, status='cancelled')
+                    save_job_state(job_id)
+                    return
+                _process_page(job_id, model, img_path, i, num_pages, job_output_dir, pages_data_dir)
 
-                result.save(output_dir=job_output_dir)
-
-                img_stem  = os.path.splitext(os.path.basename(img_path))[0]
-                page_output_dir = os.path.join(job_output_dir, img_stem)
-
-                md_file = os.path.join(page_output_dir, f"{img_stem}.md")
-                vis_dir = os.path.join(page_output_dir, 'layout_vis')
-
-                content = ""
-                if os.path.exists(md_file):
-                    with open(md_file, 'r', encoding='utf-8') as f:
-                        content = f.read()
-
-                orig_image_url = f"/api/image/{job_id}/page_{i}.jpg"
-                vis_image_url  = None
-
-                if os.path.exists(vis_dir):
-                    vis_files = sorted([f for f in os.listdir(vis_dir) if f.endswith(('.jpg', '.png'))])
-                    if vis_files:
-                        vis_image_url = f"/api/image/{job_id}/{img_stem}/layout_vis/{vis_files[0]}"
-
-                page_data = {
-                    'page_num':     i + 1,
-                    'content':      content,
-                    'image':        orig_image_url,
-                    'layout_image': vis_image_url or orig_image_url  # fall back to original
-                }
-
-                with open(os.path.join(pages_data_dir, f"page_{i}.json"), 'w') as pf:
-                    json.dump(page_data, pf)
-
-                jobs[job_id]['status']               = 'processing'
-                jobs[job_id]['total_pages']          = num_pages
-                jobs[job_id]['progress']             = int(((i + 1) / num_pages) * 100)
-                jobs[job_id]['total_pages_finished'] = i + 1
-                save_job_state(job_id)
-
-        jobs[job_id]['status']   = 'completed'
-        jobs[job_id]['progress'] = 100
-        logger.info(f"[{job_id}] Job completed successfully.")
+        if _is_cancelled(job_id):
+            _update_job(job_id, status='cancelled')
+            logger.info(f"[{job_id}] Cancelled after final page.")
+        else:
+            _update_job(job_id, status='completed', progress=100)
+            logger.info(f"[{job_id}] Job completed successfully.")
         save_job_state(job_id)
 
-        # The uploaded file is no longer needed, delete it to save space.
+    except Exception as e:
+        if _is_cancelled(job_id):
+            _update_job(job_id, status='cancelled')
+        else:
+            logger.exception(f"[{job_id}] critical error during OCR processing")
+            _update_job(job_id, status='failed', error='OCR processing failed')
+        save_job_state(job_id)
+    finally:
         try:
             if os.path.exists(file_path):
                 os.remove(file_path)
         except Exception as e:
             logger.warning(f"[{job_id}] Could not remove upload file {file_path}: {e}")
 
-    except Exception as e:
-        logger.exception(f"[{job_id}] critical error during OCR processing")
-        jobs[job_id]['status'] = 'failed'
-        jobs[job_id]['error']  = str(e)
+
+def ocr_worker_batch_images(job_id, file_paths):
+    """Process multiple images as a single batch job."""
+    if _is_cancelled(job_id):
+        _update_job(job_id, status='cancelled')
         save_job_state(job_id)
+        for fp in file_paths:
+            try:
+                if os.path.exists(fp):
+                    os.remove(fp)
+            except Exception:
+                pass
+        return
+    display_name = jobs[job_id]['filename']
+    _update_job(job_id, status='processing')
+    logger.info(f"Starting batch image OCR job for {display_name} (ID: {job_id})")
+    save_job_state(job_id)
+
+    try:
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        folder_name = f"batch_{timestamp}"
+        job_output_dir = os.path.join(app.config['OUTPUT_FOLDER'], folder_name)
+        os.makedirs(job_output_dir, exist_ok=True)
+
+        _update_job(job_id, output_dir=job_output_dir)
+
+        num_pages = len(file_paths)
+        page_images = []
+        for i, fp in enumerate(file_paths):
+            img_path = os.path.join(job_output_dir, f"page_{i}.jpg")
+            with Image.open(fp) as img:
+                img.convert("RGB").save(img_path, "JPEG")
+            page_images.append(img_path)
+
+        pages_data_dir = os.path.join(job_output_dir, "pages_data")
+        os.makedirs(pages_data_dir, exist_ok=True)
+
+        with GlmOcr(config_path=GLM_CONFIG) as model:
+            for i, img_path in enumerate(page_images):
+                if _is_cancelled(job_id):
+                    logger.info(f"[{job_id}] Cancelled after page {i}.")
+                    _update_job(job_id, status='cancelled')
+                    save_job_state(job_id)
+                    return
+                _process_page(job_id, model, img_path, i, num_pages, job_output_dir, pages_data_dir)
+
+        if _is_cancelled(job_id):
+            _update_job(job_id, status='cancelled')
+            logger.info(f"[{job_id}] Cancelled after final page.")
+        else:
+            _update_job(job_id, status='completed', progress=100)
+            logger.info(f"[{job_id}] Batch job completed successfully.")
+        save_job_state(job_id)
+
+    except Exception as e:
+        if _is_cancelled(job_id):
+            _update_job(job_id, status='cancelled')
+        else:
+            logger.exception(f"[{job_id}] critical error during batch OCR processing")
+            _update_job(job_id, status='failed', error='OCR processing failed')
+        save_job_state(job_id)
+    finally:
+        for fp in file_paths:
+            try:
+                if os.path.exists(fp):
+                    os.remove(fp)
+            except Exception as e:
+                logger.warning(f"[{job_id}] Could not remove upload file {fp}: {e}")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5003, debug=False)

@@ -1,7 +1,14 @@
 // GLM-OCR Inference | Frontend Logic
 
 const dropZone = document.getElementById('dropZone');
-const fileInput = document.getElementById('fileInput');
+const fileInputPdf = document.getElementById('fileInputPdf');
+const fileInputImages = document.getElementById('fileInputImages');
+const modePdfBtn = document.getElementById('modePdf');
+const modeImagesBtn = document.getElementById('modeImages');
+const bundlePrompt = document.getElementById('bundlePrompt');
+const bundleText = document.getElementById('bundleText');
+const bundleYesBtn = document.getElementById('bundleYes');
+const bundleNoBtn = document.getElementById('bundleNo');
 const uploadView = document.getElementById('uploadView');
 const progressContainer = document.getElementById('progressContainer');
 const progressBar = document.getElementById('progressBar');
@@ -16,6 +23,7 @@ const historyModal = document.getElementById('historyModal');
 const closeHistoryBtn = document.getElementById('closeHistoryBtn');
 const historyList = document.getElementById('historyList');
 const toggleLayoutBtn = document.getElementById('toggleLayoutBtn');
+const docTitle = document.getElementById('docTitle');
 const exportBtn = document.getElementById('exportBtn');
 
 // Jump Inputs
@@ -30,6 +38,8 @@ let currentPageIndex = 0;
 let isPolling = false;
 let showLayout = false;
 let pageCache = {};
+let pollRetryCount = 0;
+const MAX_POLL_RETRIES = 120;
 
 // Initialize
 async function init() {
@@ -37,6 +47,7 @@ async function init() {
 
     try {
         const response = await fetch('/api/jobs');
+        if (!response.ok) throw new Error(`Server error: ${response.status}`);
         const jobs = await response.json();
 
         if (jobs.length > 0) {
@@ -51,9 +62,50 @@ async function init() {
     }
 }
 
-// Drag & Drop Handlers
-if (dropZone) dropZone.addEventListener('click', () => fileInput.click());
+// Upload Mode Buttons
+let pendingImageFiles = null;
 
+if (modePdfBtn) modePdfBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fileInputPdf.click();
+});
+if (modeImagesBtn) modeImagesBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fileInputImages.click();
+});
+
+if (fileInputPdf) fileInputPdf.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) uploadFiles(e.target.files, 'pdf');
+    e.target.value = '';
+});
+
+if (fileInputImages) fileInputImages.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) promptBundleOrUpload(e.target.files);
+    e.target.value = '';
+});
+
+function promptBundleOrUpload(files) {
+    if (files.length <= 1) {
+        uploadFiles(files, 'image', false);
+        return;
+    }
+    pendingImageFiles = files;
+    if (bundleText) bundleText.innerText = `Bundle ${files.length} images as one document?`;
+    if (bundlePrompt) bundlePrompt.style.display = 'block';
+}
+
+if (bundleYesBtn) bundleYesBtn.addEventListener('click', () => {
+    if (bundlePrompt) bundlePrompt.style.display = 'none';
+    if (pendingImageFiles) uploadFiles(pendingImageFiles, 'image', true);
+    pendingImageFiles = null;
+});
+if (bundleNoBtn) bundleNoBtn.addEventListener('click', () => {
+    if (bundlePrompt) bundlePrompt.style.display = 'none';
+    if (pendingImageFiles) uploadFiles(pendingImageFiles, 'image', false);
+    pendingImageFiles = null;
+});
+
+// Drag & Drop with auto-detection
 if (dropZone) {
     dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
@@ -68,37 +120,66 @@ if (dropZone) {
         e.preventDefault();
         dropZone.classList.remove('dragover');
         const files = e.dataTransfer.files;
-        if (files.length > 0) handleFileUpload(files[0]);
+        if (files.length === 0) return;
+
+        const IMAGE_EXTS = ['jpg', 'jpeg', 'png'];
+        let hasPdf = false, hasImage = false;
+        for (const f of files) {
+            const ext = f.name.split('.').pop().toLowerCase();
+            if (ext === 'pdf') hasPdf = true;
+            else if (IMAGE_EXTS.includes(ext)) hasImage = true;
+            else {
+                alert(`Unsupported file type: ${f.name}`);
+                return;
+            }
+        }
+
+        if (hasPdf && hasImage) {
+            alert('Please upload either PDFs or images, not both at once.');
+            return;
+        }
+
+        if (hasPdf) {
+            uploadFiles(files, 'pdf');
+        } else {
+            promptBundleOrUpload(files);
+        }
     });
 }
 
-if (fileInput) fileInput.addEventListener('change', (e) => {
-    if (e.target.files.length > 0) handleFileUpload(e.target.files[0]);
-});
-
-async function handleFileUpload(file) {
+async function uploadFiles(files, mode, bundle) {
     if (dropZone) dropZone.style.display = 'none';
+    if (bundlePrompt) bundlePrompt.style.display = 'none';
     if (progressContainer) progressContainer.style.display = 'block';
 
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('mode', mode);
+    if (mode === 'image') formData.append('bundle', bundle ? 'true' : 'false');
+    for (const file of files) {
+        formData.append('files', file);
+    }
 
     try {
         const response = await fetch('/api/upload', {
             method: 'POST',
             body: formData
         });
+        if (!response.ok) throw new Error(`Upload failed (${response.status})`);
         const data = await response.json();
 
-        if (data.job_id) {
+        if (data.jobs && data.jobs.length > 0) {
+            currentJobId = data.jobs[0].job_id;
+            pollStatus();
+            if (data.jobs.length > 1) openHistory();
+        } else if (data.job_id) {
             currentJobId = data.job_id;
             pollStatus();
         } else {
-            alert('Upload failed: ' + data.error);
+            alert('Upload failed: ' + (data.error || 'Unknown error'));
             resetUI();
         }
     } catch (err) {
-        alert('Error uploading file: ' + err.message);
+        alert('Error uploading files: ' + err.message);
         resetUI();
     }
 }
@@ -109,7 +190,14 @@ async function pollStatus() {
 
     try {
         const response = await fetch(`/api/status/${currentJobId}`);
+        if (!response.ok) {
+            if (response.status === 404) { resetUI(); isPolling = false; return; }
+            throw new Error(`Server error: ${response.status}`);
+        }
         const data = await response.json();
+        pollRetryCount = 0;
+
+        if (docTitle && data.filename) docTitle.textContent = data.filename;
 
         const oldFinished = totalPagesFinished;
         totalPagesFinished = data.total_pages_finished || 0;
@@ -121,10 +209,8 @@ async function pollStatus() {
                 resultView.style.display = 'grid';
                 if (newScanBtn) newScanBtn.style.display = 'block';
 
-                // Restore last viewed page
                 renderPage(lastPageIdx);
             } else if (totalPagesFinished > oldFinished) {
-                // If it's a fresh job load (oldFinished was 0)
                 if (oldFinished === 0) {
                     renderPage(lastPageIdx);
                 } else {
@@ -141,6 +227,19 @@ async function pollStatus() {
             alert('OCR Processing failed: ' + data.error);
             resetUI();
             isPolling = false;
+        } else if (data.status === 'cancelled') {
+            if (progressContainer) progressContainer.style.display = 'none';
+            if (scanningIndicator) scanningIndicator.style.display = 'none';
+            if (statusText) statusText.innerText = 'Job cancelled.';
+            isPolling = false;
+        } else if (data.status === 'cancelling') {
+            if (progressContainer) progressContainer.style.display = 'block';
+            if (scanningIndicator) scanningIndicator.style.display = 'block';
+            if (statusText) statusText.innerText = 'Cancelling after current page...';
+            setTimeout(() => {
+                isPolling = false;
+                pollStatus();
+            }, 2000);
         } else {
             if (progressContainer) progressContainer.style.display = 'block';
             if (scanningIndicator) scanningIndicator.style.display = 'block';
@@ -168,8 +267,10 @@ async function pollStatus() {
     } catch (err) {
         console.error('Status poll error:', err);
         isPolling = false;
-        if (err.message && err.message.includes('404')) {
-            resetUI();
+        pollRetryCount++;
+        if (pollRetryCount >= MAX_POLL_RETRIES) {
+            if (statusText) statusText.innerText = 'Status polling timed out. Refresh the page to retry.';
+            if (scanningIndicator) scanningIndicator.style.display = 'none';
         } else {
             setTimeout(pollStatus, 5000);
         }
@@ -177,40 +278,42 @@ async function pollStatus() {
 }
 
 async function renderPage(index) {
-    // Bounds check
     if (index < 0) index = 0;
     if (totalPagesFinished > 0 && index >= totalPagesFinished) index = totalPagesFinished - 1;
 
     currentPageIndex = index;
+    const jobIdAtStart = currentJobId;
 
-    // Check cache first
     let page = pageCache[index];
 
     if (!page) {
         if (markdownContainer) markdownContainer.innerHTML = '<div class="loading-spinner">Loading page content...</div>';
         try {
             const response = await fetch(`/api/page/${currentJobId}/${index}`);
+            if (currentJobId !== jobIdAtStart) return;
+            if (!response.ok) throw new Error(`Server error: ${response.status}`);
             page = await response.json();
             pageCache[index] = page;
         } catch (err) {
             console.error('Failed to fetch page:', err);
-            if (markdownContainer) markdownContainer.innerHTML = '<div class="error-msg">Failed to load page content.</div>';
+            if (currentJobId === jobIdAtStart && markdownContainer) {
+                markdownContainer.innerHTML = '<div class="error-msg">Failed to load page content.</div>';
+            }
             return;
         }
     }
 
-    // Render Markdown
+    if (currentJobId !== jobIdAtStart) return;
+
     if (markdownContainer) {
-        markdownContainer.innerHTML = marked.parse(page.content || "*(No text detected yet)*");
+        const rawHtml = marked.parse(page.content || "*(No text detected yet)*");
+        markdownContainer.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(rawHtml) : rawHtml;
         markdownContainer.scrollTop = 0;
     }
 
-    // Update Image Preview
     updateImagePreview();
-
     updateNavigationUI();
 
-    // Save last page index to backend
     fetch(`/api/last_page/${currentJobId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -307,45 +410,131 @@ if (newScanBtn) newScanBtn.addEventListener('click', () => {
 });
 
 // History Modal Logic
+let jobsRefreshInterval = null;
+
+function closeJobsModal() {
+    if (historyModal) historyModal.style.display = 'none';
+    if (jobsRefreshInterval) {
+        clearInterval(jobsRefreshInterval);
+        jobsRefreshInterval = null;
+    }
+}
+
 if (historyBtn) historyBtn.addEventListener('click', openHistory);
-if (closeHistoryBtn) closeHistoryBtn.addEventListener('click', () => historyModal.style.display = 'none');
+if (closeHistoryBtn) closeHistoryBtn.addEventListener('click', closeJobsModal);
 if (historyModal) historyModal.addEventListener('click', (e) => {
-    if (e.target === historyModal) historyModal.style.display = 'none';
+    if (e.target === historyModal) closeJobsModal();
 });
 
 async function openHistory() {
     historyModal.style.display = 'flex';
-    historyList.innerHTML = '<div class="loading-spinner">Loading history...</div>';
+    await renderJobsList();
 
+    if (jobsRefreshInterval) clearInterval(jobsRefreshInterval);
+    jobsRefreshInterval = setInterval(async () => {
+        if (historyModal.style.display !== 'flex') {
+            clearInterval(jobsRefreshInterval);
+            jobsRefreshInterval = null;
+            return;
+        }
+        await renderJobsList();
+    }, 3000);
+}
+
+async function cancelJob(jobId, e) {
+    e.stopPropagation();
+    try {
+        const resp = await fetch(`/api/cancel/${jobId}`, { method: 'POST' });
+        if (resp.ok) await renderJobsList();
+    } catch (err) {
+        console.error('Cancel failed:', err);
+    }
+}
+
+async function cancelAllJobs() {
+    try {
+        const resp = await fetch('/api/cancel_all', { method: 'POST' });
+        if (resp.ok) await renderJobsList();
+    } catch (err) {
+        console.error('Cancel all failed:', err);
+    }
+}
+
+async function renderJobsList() {
     try {
         const response = await fetch('/api/jobs');
-        const jobs = await response.json();
+        if (!response.ok) throw new Error(`Server error: ${response.status}`);
+        const jobsList = await response.json();
 
-        if (jobs.length === 0) {
-            historyList.innerHTML = '<div class="loading-spinner">No scans found on disk.</div>';
+        if (jobsList.length === 0) {
+            historyList.innerHTML = '<div class="loading-spinner">No jobs yet.</div>';
             return;
         }
 
         historyList.innerHTML = '';
-        jobs.forEach(job => {
+        let hasActive = false;
+        jobsList.forEach(job => {
             const date = new Date(job.start_time * 1000).toLocaleString();
+            const isActive = ['queued', 'splitting', 'processing', 'cancelling'].includes(job.status);
+            if (isActive) hasActive = true;
+
             const item = document.createElement('div');
             item.className = 'history-item';
-            item.innerHTML = `
-                <div class="history-info">
-                    <h4>${job.filename}</h4>
-                    <div class="history-meta">${date} • ${job.page_count} pages</div>
-                </div>
-                <div class="history-badge">${job.status}</div>
-            `;
-            item.onclick = () => {
-                loadJob(job.job_id);
-                historyModal.style.display = 'none';
-            };
+            item.setAttribute('role', 'button');
+            item.setAttribute('tabindex', '0');
+
+            const info = document.createElement('div');
+            info.className = 'history-info';
+            const title = document.createElement('h4');
+            title.textContent = job.filename;
+            const meta = document.createElement('div');
+            meta.className = 'history-meta';
+            meta.textContent = `${date} • ${job.page_count} pages`;
+            info.appendChild(title);
+            info.appendChild(meta);
+
+            const actions = document.createElement('div');
+            actions.className = 'history-actions';
+
+            if (isActive && job.status !== 'cancelling') {
+                const cancelBtn = document.createElement('button');
+                cancelBtn.className = 'btn-cancel';
+                cancelBtn.textContent = 'Cancel';
+                cancelBtn.onclick = (e) => cancelJob(job.job_id, e);
+                actions.appendChild(cancelBtn);
+            }
+
+            const badge = document.createElement('div');
+            badge.className = `history-badge ${job.status}`;
+            badge.textContent = job.status;
+            actions.appendChild(badge);
+
+            item.appendChild(info);
+            item.appendChild(actions);
+
+            const activate = () => { loadJob(job.job_id); closeJobsModal(); };
+            item.onclick = activate;
+            item.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); } };
             historyList.appendChild(item);
         });
+
+        // Cancel All button
+        const cancelAllContainer = document.getElementById('cancelAllContainer');
+        if (cancelAllContainer) {
+            cancelAllContainer.style.display = hasActive ? 'block' : 'none';
+        }
+
+        if (!hasActive && jobsRefreshInterval) {
+            clearInterval(jobsRefreshInterval);
+            jobsRefreshInterval = null;
+        }
     } catch (err) {
-        historyList.innerHTML = `<div class="loading-spinner" style="color:red">Error: ${err.message}</div>`;
+        const errDiv = document.createElement('div');
+        errDiv.className = 'loading-spinner';
+        errDiv.style.color = 'red';
+        errDiv.textContent = `Error: ${err.message}`;
+        historyList.innerHTML = '';
+        historyList.appendChild(errDiv);
     }
 }
 
@@ -355,7 +544,10 @@ function loadJob(jobId) {
     currentPageIndex = 0;
     pageCache = {};
     isPolling = false;
+    pollRetryCount = 0;
 
+    if (markdownContainer) markdownContainer.innerHTML = '<div class="loading-spinner">Waiting for pages...</div>';
+    if (pagePreview) pagePreview.src = '';
     if (progressContainer) progressContainer.style.display = 'block';
 
     pollStatus();
@@ -372,8 +564,19 @@ function resetUI() {
     if (progressContainer) progressContainer.style.display = 'none';
     if (resultView) resultView.style.display = 'none';
     if (newScanBtn) newScanBtn.style.display = 'none';
+    if (docTitle) docTitle.textContent = 'Original Document';
     if (progressBar) progressBar.style.width = '0%';
     if (statusText) statusText.innerText = 'Ready to scan';
+}
+
+if (exportBtn) {
+    const dropdown = exportBtn.closest('.dropdown');
+    exportBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        dropdown.classList.toggle('active');
+    });
+    document.addEventListener('click', () => dropdown.classList.remove('active'));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') dropdown.classList.remove('active'); });
 }
 
 window.handleExport = async function (scope, format) {

@@ -10,6 +10,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
 </head>
 
 <body>
@@ -36,7 +37,7 @@
                         <path d="M3 3v5h5" />
                         <path d="M12 7v5l4 2" />
                     </svg>
-                    History
+                    Jobs
                 </button>
                 <button id="newScanBtn" class="btn btn-outline" style="display: none;">New Scan</button>
             </div>
@@ -65,8 +66,20 @@
                     </svg>
                 </div>
                 <h2>Upload Document</h2>
-                <p>Drag and drop your PDF or images here</p>
-                <input type="file" id="fileInput" hidden accept=".pdf,.png,.jpg,.jpeg">
+                <p>Drag and drop files, or choose a type</p>
+                <div class="upload-mode-buttons">
+                    <button id="modePdf" class="mode-btn" type="button">PDFs</button>
+                    <button id="modeImages" class="mode-btn" type="button">Images</button>
+                </div>
+                <input type="file" id="fileInputPdf" hidden accept=".pdf" multiple>
+                <input type="file" id="fileInputImages" hidden accept=".png,.jpg,.jpeg" multiple>
+            </div>
+            <div id="bundlePrompt" class="bundle-prompt" style="display: none;">
+                <p id="bundleText">Bundle images as one document?</p>
+                <div class="bundle-buttons">
+                    <button id="bundleYes" class="mode-btn" type="button">Yes, one document</button>
+                    <button id="bundleNo" class="mode-btn" type="button">No, separate jobs</button>
+                </div>
             </div>
         </main>
 
@@ -75,7 +88,7 @@
             <!-- Left Side: Document Preview -->
             <div class="panel">
                 <div class="panel-header">
-                    <span>Original Document w/ layout_vis</span>
+                    <span id="docTitle">Original Document</span>
                     <div class="controls">
                         <button id="toggleLayoutBtn" class="btn btn-outline btn-sm">Show Layout</button>
                         <div class="page-info">
@@ -133,20 +146,23 @@
         </main>
     </div>
 
-    </div>
-
     <!-- History Modal -->
     <div id="historyModal" class="modal-overlay">
         <div class="modal-card">
             <div class="modal-header">
-                <h3>Scan History</h3>
-                <button id="closeHistoryBtn" class="btn-icon">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="18" y1="6" x2="6" y2="18" />
-                        <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                </button>
+                <h3>Jobs</h3>
+                <div class="controls">
+                    <div id="cancelAllContainer" style="display: none;">
+                        <button id="cancelAllBtn" class="btn-cancel" onclick="cancelAllJobs()">Cancel All</button>
+                    </div>
+                    <button id="closeHistoryBtn" class="btn-icon" aria-label="Close">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                    </button>
+                </div>
             </div>
             <div id="historyList" class="modal-content">
                 <div class="loading-spinner">Loading history...</div>
